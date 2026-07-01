@@ -1,16 +1,17 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from services.claude_service import summarize_document, ask_question
-import PyPDF2
+from services.claude_service import summarize_document, stream_question
+import pdfplumber
 import io
 
 router = APIRouter(prefix="/api/documents")
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
     text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text() or ""
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            text += page.extract_text() or ""
     return text
 
 class AskRequest(BaseModel):
@@ -34,10 +35,21 @@ async def upload_document(file: UploadFile = File(...)):
         "filename": file.filename,
         "text": text,
         "summary": summary,
-        "pages": len(PyPDF2.PdfReader(io.BytesIO(content)).pages)
+        "pages": len(pdfplumber.PDF(io.BytesIO(content)).pages)
     }
 
 @router.post("/ask")
 async def ask_document_question(request: AskRequest):
-    answer = ask_question(request.document_text, request.question)
-    return {"answer": answer}
+    def generate():
+        for chunk in stream_question(request.document_text, request.question):
+            yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(), 
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # désactive le buffer nginx
+        }
+    )

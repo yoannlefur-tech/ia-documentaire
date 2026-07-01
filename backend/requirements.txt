@@ -4,3 +4,4 @@ anthropic
 python-multipart
 pypdf2
 python-dotenv
+pdfplumber
